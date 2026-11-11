@@ -1,0 +1,10 @@
+{
+  "description": "Create and manage interactive mockups for web and mobile applications, enabling designers and developers to visualize and refine their ideas effectively.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

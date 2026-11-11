@@ -1,0 +1,39 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Lora:ital,wght@0,400;0,600;1,400&display=swap');
+@import 'tailwindcss';
+
+@theme {
+  --color-primary: #2F5D50;
+  --color-primary-deep: #23463D;
+  --color-wood: #8B5E3C;
+  --color-beige: #F7F3EA;
+  --color-beige-dark: #EDE8DC;
+  --color-soft-green: #7A9E7E;
+  --color-success: #3F8F5F;
+  --color-gold: #D9A441;
+  --color-danger: #C94C4C;
+  --color-dark: #252525;
+
+  --font-sans: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-serif: 'Lora', ui-serif, georgia, serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-sans);
+  color: #252525;
+  background: #F7F3EA;
+}
+
+* {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+*::-webkit-scrollbar {
+  display: none;
+}
