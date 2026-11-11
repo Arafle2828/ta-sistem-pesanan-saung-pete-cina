@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { TrendingUp, ShoppingBag, Clock, Star, ArrowUpRight } from "lucide-react";
+import { TrendingUp, ShoppingBag, Clock, Star } from "lucide-react";
 import {
   ResponsiveContainer,
   LineChart,
@@ -11,14 +11,7 @@ import {
   CartesianGrid,
   Tooltip,
 } from "recharts";
-import {
-  orders as fallbackOrders,
-  dailySalesData as fallbackSales,
-  topMenuData as fallbackTopMenus,
-  formatRp,
-  type Order,
-} from "../data/mockData";
-import { api, mapDbOrderToUi } from "../lib/api";
+import { api, formatRp, mapDbOrderToUi, type Order } from "../lib/api";
 
 const STATUS_LABEL: Record<string, string> = {
   new: "Baru",
@@ -77,9 +70,13 @@ interface Props {
 }
 
 export default function Dashboard({ onViewOrder }: Props) {
-  const [orders, setOrders] = useState<Order[]>(fallbackOrders);
-  const [salesData, setSalesData] = useState(fallbackSales);
-  const [topMenus, setTopMenus] = useState(fallbackTopMenus);
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [salesData, setSalesData] = useState<
+    Array<{ day: string; revenue: number; transactions: number; expenses: number }>
+  >([]);
+  const [topMenus, setTopMenus] = useState<Array<{ name: string; sold: number; revenue: number }>>(
+    []
+  );
   const [summary, setSummary] = useState<{
     total_transactions_today: number;
     total_revenue_today: number;
@@ -147,7 +144,7 @@ export default function Dashboard({ onViewOrder }: Props) {
     summary?.total_transactions_today ?? salesData[salesData.length - 1]?.transactions ?? 0;
   const activeOrders =
     summary?.active_orders ?? orders.filter((o) => o.status !== "done").length;
-  const topItem = topMenus[0] || { name: summary?.top_menu_today || "Ayam Taliwang", sold: 0 };
+  const topItem = topMenus[0] || { name: summary?.top_menu_today || "-", sold: 0 };
 
   return (
     <div className="h-full overflow-y-auto bg-beige px-6 py-6 space-y-6">
@@ -174,7 +171,6 @@ export default function Dashboard({ onViewOrder }: Props) {
             sub: "transaksi",
             icon: ShoppingBag,
             color: "bg-primary",
-            trend: "+12%",
           },
           {
             label: "Total Pendapatan Hari Ini",
@@ -182,7 +178,6 @@ export default function Dashboard({ onViewOrder }: Props) {
             sub: "pendapatan hari ini",
             icon: TrendingUp,
             color: "bg-wood",
-            trend: "+8%",
           },
           {
             label: "Pesanan Diproses",
@@ -190,7 +185,6 @@ export default function Dashboard({ onViewOrder }: Props) {
             sub: "pesanan aktif",
             icon: Clock,
             color: "bg-gold",
-            trend: "",
           },
           {
             label: "Menu Terlaris",
@@ -198,7 +192,6 @@ export default function Dashboard({ onViewOrder }: Props) {
             sub: `${topItem.sold} terjual`,
             icon: Star,
             color: "bg-soft-green",
-            trend: "",
           },
         ].map((card, i) => (
           <div key={i} className="bg-white rounded-2xl p-5 border border-beige-dark shadow-sm">
@@ -206,12 +199,6 @@ export default function Dashboard({ onViewOrder }: Props) {
               <div className={`w-10 h-10 rounded-xl ${card.color} flex items-center justify-center`}>
                 <card.icon size={18} className="text-white" />
               </div>
-              {card.trend && (
-                <span className="text-xs font-semibold text-success bg-success/10 px-2 py-0.5 rounded-full flex items-center gap-1">
-                  <ArrowUpRight size={11} />
-                  {card.trend}
-                </span>
-              )}
             </div>
             <p className="text-xl font-bold text-dark leading-tight">{card.value}</p>
             <p className="text-xs text-dark/50 mt-0.5">{card.label}</p>

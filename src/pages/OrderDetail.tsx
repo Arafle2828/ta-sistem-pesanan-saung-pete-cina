@@ -1,7 +1,6 @@
 import { useState, useEffect } from "react";
 import { ArrowLeft, Clock, CheckCircle2, ChefHat, Bell, Package, Printer } from "lucide-react";
-import { orders as fallbackOrders, formatRp, type Order, type PaymentMethod } from "../data/mockData";
-import { api, mapDbOrderToUi } from "../lib/api";
+import { api, formatRp, mapDbOrderToUi, type Order, type PaymentMethod } from "../lib/api";
 
 const STATUS_STEPS: {
   key: string;
@@ -46,10 +45,8 @@ interface Props {
 }
 
 export default function OrderDetail({ orderId, onBack }: Props) {
-  const [order, setOrder] = useState<Order>(
-    () => fallbackOrders.find((o) => o.id === orderId) ?? fallbackOrders[0]
-  );
-  const [payMethod, setPayMethod] = useState<PaymentMethod>(order.paymentMethod || "QRIS");
+  const [order, setOrder] = useState<Order | null>(null);
+  const [payMethod, setPayMethod] = useState<PaymentMethod>("QRIS");
   const [processingPay, setProcessingPay] = useState(false);
 
   useEffect(() => {
@@ -69,6 +66,25 @@ export default function OrderDetail({ orderId, onBack }: Props) {
     };
   }, [orderId]);
 
+  if (!order) {
+    return (
+      <div className="h-full overflow-y-auto bg-beige px-6 py-6 space-y-5">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={onBack}
+            className="w-9 h-9 rounded-xl border border-beige-dark bg-white flex items-center justify-center text-dark/50 hover:text-dark transition-colors"
+          >
+            <ArrowLeft size={16} />
+          </button>
+          <h1 className="text-xl font-bold text-dark font-serif">Detail Pesanan</h1>
+        </div>
+        <div className="bg-white rounded-2xl border border-beige-dark p-10 text-center text-dark/40 text-sm">
+          Memuat detail pesanan...
+        </div>
+      </div>
+    );
+  }
+
   const statusIndex = STATUS_INDEX[order.status] ?? 0;
   const subtotal = order.items.reduce((a, i) => a + i.price * i.qty, 0);
   const total = order.total || subtotal;
@@ -81,19 +97,18 @@ export default function OrderDetail({ orderId, onBack }: Props) {
         payMethod.toLowerCase() as "cash" | "debit" | "qris",
         total
       );
-      setOrder((prev) => ({
-        ...prev,
-        status: "done",
-        paymentMethod: payMethod,
-        paymentStatus: "paid",
-      }));
+      setOrder((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: "done",
+              paymentMethod: payMethod,
+              paymentStatus: "paid",
+            }
+          : prev
+      );
     } catch {
-      setOrder((prev) => ({
-        ...prev,
-        status: "done",
-        paymentMethod: payMethod,
-        paymentStatus: "paid",
-      }));
+      // Abaikan jika gagal memproses pembayaran
     } finally {
       setProcessingPay(false);
     }

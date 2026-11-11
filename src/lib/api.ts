@@ -1,6 +1,76 @@
-import type { MenuCategory, MenuItem, Order, OrderStatus, PaymentMethod } from "../data/mockData";
+export type MenuCategory =
+  | "Semua"
+  | "Best Seller"
+  | "Makanan"
+  | "Lauk"
+  | "Soto"
+  | "Sayuran"
+  | "Minuman"
+  | "Paket";
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
+export const CATEGORIES: MenuCategory[] = [
+  "Semua",
+  "Best Seller",
+  "Makanan",
+  "Lauk",
+  "Soto",
+  "Sayuran",
+  "Minuman",
+  "Paket",
+];
+
+export type OrderStatus = "new" | "processing" | "preparing" | "ready" | "done";
+export type PaymentMethod = "Cash" | "Debit" | "QRIS";
+
+export interface MenuItem {
+  id: string | number;
+  name: string;
+  category: Exclude<MenuCategory, "Semua">;
+  price: number;
+  description: string;
+  image: string | null;
+  available: boolean;
+}
+
+export interface OrderItem {
+  menu_id?: string | number;
+  name: string;
+  qty: number;
+  price: number;
+  notes?: string;
+}
+
+export interface Order {
+  id: string;
+  dbId?: string;
+  table: number;
+  customerName?: string;
+  orderType?: "dine-in" | "takeaway";
+  notes?: string;
+  time: string;
+  items: OrderItem[];
+  status: OrderStatus;
+  total: number;
+  paymentMethod: PaymentMethod;
+  paymentStatus?: "paid" | "pending";
+  createdAt: string;
+}
+
+export interface TableInfo {
+  id: string;
+  table_number: number;
+  qr_code_url: string;
+  status: "available" | "occupied";
+  active_orders_count: number;
+}
+
+export const formatRp = (amount: number): string => {
+  return "Rp " + Number(amount || 0).toLocaleString("id-ID");
+};
+
+const defaultHost =
+  typeof window !== "undefined" ? window.location.hostname || "localhost" : "localhost";
+const API_BASE_URL = import.meta.env.VITE_API_URL || `http://${defaultHost}:5000/api`;
 
 function getHeaders() {
   const token = localStorage.getItem("spc_token");
@@ -62,9 +132,9 @@ export function mapDbOrderToUi(row: any): Order {
   return {
     id: row.order_number || String(row.id),
     dbId: row.id,
-    table: Number(row.table_number || 1),
-    customerName: row.customer_name || "Pelanggan",
-    orderType: row.order_type || "dine-in",
+    table: Number(row.table_number || row.table || 1),
+    customerName: row.customer_name || row.customerName || "Pelanggan",
+    orderType: row.order_type || row.orderType || "dine-in",
     notes: row.notes || undefined,
     time: timeStr,
     items: rawItems.map((it: any) => ({
@@ -75,8 +145,8 @@ export function mapDbOrderToUi(row: any): Order {
       notes: it.item_notes || it.notes || undefined,
     })),
     status: normalizeStatus(row.status),
-    total: Number(row.total_amount || 0),
-    paymentMethod: normalizePaymentMethod(row.payment_method),
+    total: Number(row.total_amount ?? row.total ?? 0),
+    paymentMethod: normalizePaymentMethod(row.payment_method || row.paymentMethod),
     paymentStatus: row.payment_status === "paid" ? "paid" : "pending",
     createdAt: row.created_at || created.toISOString(),
   };
@@ -165,8 +235,29 @@ export const api = {
   },
 
   // Tables
-  async getTables() {
-    return request<{ success: boolean; tables: any[] }>("/tables");
+  async getTables(): Promise<{ success: boolean; tables: TableInfo[] }> {
+    const res = await request<{ success: boolean; tables: any[] }>("/tables");
+    return {
+      success: true,
+      tables: (res.tables || []).map((t) => ({
+        id: String(t.id),
+        table_number: Number(t.table_number),
+        qr_code_url: t.qr_code_url || `/order?table=${t.table_number}`,
+        status: t.status === "occupied" ? "occupied" : "available",
+        active_orders_count: Number(t.active_orders_count || 0),
+      })),
+    };
+  },
+
+  async getTableByNumber(tableNumber: number) {
+    return request<{ success: boolean; table: any }>(`/tables/${tableNumber}`);
+  },
+
+  async updateTableStatus(idOrTableNumber: string | number, status: "available" | "occupied") {
+    return request<{ success: boolean; table: any }>(`/tables/${idOrTableNumber}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ status }),
+    });
   },
 
   // Orders
@@ -184,10 +275,11 @@ export const api = {
     });
   },
 
-  async getOrders(status?: string, date?: string) {
+  async getOrders(status?: string, date?: string, tableNumber?: number) {
     const params = new URLSearchParams();
     if (status) params.append("status", status);
     if (date) params.append("date", date);
+    if (tableNumber) params.append("table_number", String(tableNumber));
     const queryStr = params.toString() ? `?${params.toString()}` : "";
     return request<{ success: boolean; orders: any[] }>(`/orders${queryStr}`);
   },
@@ -205,7 +297,11 @@ export const api = {
   },
 
   // Payments
-  async processPayment(order_id: string, payment_method: "cash" | "debit" | "qris", amount_paid: number) {
+  async processPayment(
+    order_id: string,
+    payment_method: "cash" | "debit" | "qris",
+    amount_paid: number
+  ) {
     return request<{ success: boolean; message: string; payment: any }>("/payments", {
       method: "POST",
       body: JSON.stringify({ order_id, payment_method, amount_paid }),

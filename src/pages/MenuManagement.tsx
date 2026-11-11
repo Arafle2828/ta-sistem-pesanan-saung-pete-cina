@@ -1,13 +1,13 @@
 import { useState, useEffect } from "react";
 import { Plus, Pencil, Trash2, Search, SlidersHorizontal, X, UtensilsCrossed } from "lucide-react";
 import {
-  menuItems as initialItems,
   CATEGORIES,
   formatRp,
+  api,
+  mapDbMenuToUi,
   type MenuItem,
   type MenuCategory,
-} from "../data/mockData";
-import { api, mapDbMenuToUi } from "../lib/api";
+} from "../lib/api";
 
 interface FormState {
   name: string;
@@ -28,7 +28,7 @@ const EMPTY_FORM: FormState = {
 };
 
 export default function MenuManagement() {
-  const [items, setItems] = useState<MenuItem[]>(initialItems);
+  const [items, setItems] = useState<MenuItem[]>([]);
   const [search, setSearch] = useState("");
   const [filterCat, setFilterCat] = useState<MenuCategory>("Semua");
   const [showModal, setShowModal] = useState(false);
@@ -41,7 +41,7 @@ export default function MenuManagement() {
     api
       .getMenus()
       .then((res) => {
-        if (active && Array.isArray(res.menus) && res.menus.length > 0) {
+        if (active && Array.isArray(res.menus)) {
           setItems(res.menus.map(mapDbMenuToUi));
         }
       })
@@ -87,57 +87,30 @@ export default function MenuManagement() {
       is_available: form.available,
     };
 
-    if (editItem) {
-      try {
+    try {
+      if (editItem) {
         const res = await api.updateMenu(editItem.id, payload);
         const updated = mapDbMenuToUi(res.menu);
         setItems((prev) => prev.map((i) => (i.id === editItem.id ? updated : i)));
-      } catch {
-        setItems((prev) =>
-          prev.map((i) =>
-            i.id === editItem.id
-              ? {
-                  ...i,
-                  name: payload.name,
-                  category: form.category,
-                  price: payload.price,
-                  description: payload.description,
-                  image: payload.image_url,
-                  available: payload.is_available,
-                }
-              : i
-          )
-        );
-      }
-    } else {
-      try {
+      } else {
         const res = await api.createMenu(payload);
         const created = mapDbMenuToUi(res.menu);
         setItems((prev) => [...prev, created]);
-      } catch {
-        const newItem: MenuItem = {
-          id: Date.now(),
-          name: payload.name,
-          category: form.category,
-          price: payload.price,
-          description: payload.description,
-          image: payload.image_url,
-          available: payload.is_available,
-        };
-        setItems((prev) => [...prev, newItem]);
       }
+      setShowModal(false);
+    } catch {
+      // Biarkan modal terbuka jika gagal menyimpan ke server
     }
-    setShowModal(false);
   };
 
   const handleDelete = async (id: string | number) => {
     try {
       await api.deleteMenu(id);
+      setItems((prev) => prev.filter((i) => i.id !== id));
+      setDeleteId(null);
     } catch {
-      // Tetap hapus dari state lokal jika mode offline
+      setDeleteId(null);
     }
-    setItems((prev) => prev.filter((i) => i.id !== id));
-    setDeleteId(null);
   };
 
   const toggleAvailability = async (id: string | number) => {
@@ -146,7 +119,7 @@ export default function MenuManagement() {
       const updated = mapDbMenuToUi(res.menu);
       setItems((prev) => prev.map((i) => (i.id === id ? updated : i)));
     } catch {
-      setItems((prev) => prev.map((i) => (i.id === id ? { ...i, available: !i.available } : i)));
+      // Abaikan jika server gagal
     }
   };
 

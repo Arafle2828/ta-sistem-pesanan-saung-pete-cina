@@ -10,7 +10,6 @@ let client: SupabaseClient<Database> | null = null;
 
 /**
  * Klien Supabase untuk browser (anon key; akses dibatasi RLS).
- * Dibuat lazy agar aplikasi mockup tetap bisa berjalan sebelum .env.local diisi.
  */
 export function getSupabase(): SupabaseClient<Database> {
   if (!url || !anonKey) {

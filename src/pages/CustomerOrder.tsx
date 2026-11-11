@@ -13,13 +13,13 @@ import {
   UtensilsCrossed,
 } from "lucide-react";
 import {
-  menuItems as fallbackMenuItems,
   CATEGORIES,
   formatRp,
+  api,
+  mapDbMenuToUi,
   type MenuCategory,
   type MenuItem,
-} from "../data/mockData";
-import { api, mapDbMenuToUi } from "../lib/api";
+} from "../lib/api";
 
 interface CartItem {
   item: MenuItem;
@@ -49,7 +49,9 @@ export default function CustomerOrder() {
     return Number(params.get("table")) || 5;
   }, []);
 
-  const [menus, setMenus] = useState<MenuItem[]>(fallbackMenuItems);
+  const [menus, setMenus] = useState<MenuItem[]>([]);
+  const [loadingMenus, setLoadingMenus] = useState(true);
+  const [orderError, setOrderError] = useState<string | null>(null);
   const [activeCategory, setActiveCategory] = useState<MenuCategory>("Semua");
   const [cart, setCart] = useState<CartItem[]>([]);
   const [customerName, setCustomerName] = useState("Pelanggan");
@@ -57,39 +59,72 @@ export default function CustomerOrder() {
   const [orderNote, setOrderNote] = useState("");
   const [step, setStep] = useState<"menu" | "cart" | "confirm" | "tracking">("menu");
   const [orderStatus, setOrderStatus] = useState(1);
-  const [orderNumber, setOrderNumber] = useState("ORD-0001");
+  const [orderNumber, setOrderNumber] = useState("");
+  const [activeTableOrder, setActiveTableOrder] = useState<{
+    order_number: string;
+    status: string;
+  } | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     let active = true;
+    setLoadingMenus(true);
     api
       .getMenus()
       .then((res) => {
-        if (active && Array.isArray(res.menus) && res.menus.length > 0) {
+        if (active && Array.isArray(res.menus)) {
           setMenus(res.menus.map(mapDbMenuToUi));
         }
       })
-      .catch(() => {
-        // Gunakan fallback data lokal jika server belum aktif
+      .catch(() => {})
+      .finally(() => {
+        if (active) setLoadingMenus(false);
       });
+
+    api
+      .getTableByNumber(tableNumber)
+      .then((res) => {
+        if (active && res.table?.active_orders?.length > 0) {
+          const latest = res.table.active_orders[0];
+          setActiveTableOrder({
+            order_number: latest.order_number || latest.id,
+            status: latest.status || "new",
+          });
+        }
+      })
+      .catch(() => {});
+
     return () => {
       active = false;
     };
-  }, []);
+  }, [tableNumber]);
 
   useEffect(() => {
     if (step !== "tracking" || !orderNumber) return;
-    const iv = setInterval(() => {
+    const checkStatus = () => {
       api
         .getOrderDetail(orderNumber)
         .then((res) => {
           if (res.order?.status) {
-            setOrderStatus(DB_STATUS_TO_STEP[res.order.status] ?? 1);
+            const st = res.order.status;
+            setOrderStatus(DB_STATUS_TO_STEP[st] ?? 1);
+            setActiveTableOrder(
+              st === "completed" || st === "done"
+                ? null
+                : { order_number: orderNumber, status: st }
+            );
           }
         })
         .catch(() => {});
-    }, 3000);
-    return () => clearInterval(iv);
+    };
+
+    checkStatus();
+    const iv = setInterval(checkStatus, 2500);
+    window.addEventListener("storage", checkStatus);
+    return () => {
+      clearInterval(iv);
+      window.removeEventListener("storage", checkStatus);
+    };
   }, [step, orderNumber]);
 
   const filteredMenu = useMemo(
@@ -125,6 +160,7 @@ export default function CustomerOrder() {
 
   const handleOrder = async () => {
     setSubmitting(true);
+    setOrderError(null);
     try {
       const res = await api.createOrder({
         table_number: tableNumber,
@@ -137,16 +173,13 @@ export default function CustomerOrder() {
           quantity: qty,
         })),
       });
-      if (res.order?.order_number) {
-        setOrderNumber(res.order.order_number);
-      }
+      const ordNum = res.order?.order_number || String(res.order?.id || "");
+      setOrderNumber(ordNum);
+      setActiveTableOrder({ order_number: ordNum, status: "new" });
       setOrderStatus(1);
       setStep("tracking");
-    } catch {
-      // Fallback simulasi jika backend tidak aktif
-      setOrderNumber(`ORD-${String(Math.floor(Math.random() * 900) + 100)}`);
-      setOrderStatus(1);
-      setStep("tracking");
+    } catch (err: any) {
+      setOrderError(err?.message || "Gagal mengirim pesanan ke server. Pastikan server backend aktif.");
     } finally {
       setSubmitting(false);
     }
@@ -172,6 +205,22 @@ export default function CustomerOrder() {
           <p className="text-xs text-white/60 mt-1">
             Silakan pilih menu dan pesan langsung dari meja Anda
           </p>
+          {step === "menu" && activeTableOrder && (
+            <button
+              onClick={() => {
+                setOrderNumber(activeTableOrder.order_number);
+                setOrderStatus(DB_STATUS_TO_STEP[activeTableOrder.status] ?? 1);
+                setStep("tracking");
+              }}
+              className="mt-2.5 w-full bg-gold text-white rounded-xl px-3 py-2 flex items-center justify-between text-xs font-semibold shadow-sm hover:bg-gold/90 transition-colors"
+            >
+              <span className="flex items-center gap-1.5">
+                <Clock size={13} />
+                Pesanan Aktif Meja {tableNumber}: <strong>{activeTableOrder.order_number}</strong>
+              </span>
+              <span className="underline">Pantau &rarr;</span>
+            </button>
+          )}
         </div>
 
         {step === "menu" && (
@@ -195,6 +244,16 @@ export default function CustomerOrder() {
 
             {/* Menu List */}
             <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+              {loadingMenus && (
+                <div className="text-center py-12 text-dark/40 text-sm">
+                  Memuat daftar menu...
+                </div>
+              )}
+              {!loadingMenus && filteredMenu.length === 0 && (
+                <div className="text-center py-12 text-dark/40 text-sm">
+                  Tidak ada menu tersedia pada kategori ini.
+                </div>
+              )}
               {filteredMenu.map((item) => (
                 <div
                   key={item.id}
@@ -457,6 +516,11 @@ export default function CustomerOrder() {
                   <strong>QRIS</strong>. Tagihan akan diberikan setelah makan.
                 </p>
               </div>
+              {orderError && (
+                <div className="bg-danger/10 border border-danger/30 rounded-2xl p-3 text-xs text-danger font-medium">
+                  {orderError}
+                </div>
+              )}
             </div>
             <div className="px-4 pb-6 shrink-0">
               <button

@@ -123,6 +123,9 @@ router.post("/", async (req, res) => {
     const io = req.app.get("io");
     if (io) {
       io.emit("new_order", fullOrder);
+      if (tableId) {
+        io.emit("table_status_updated", { id: tableId, table_number: Number(table_number), status: "occupied" });
+      }
     }
 
     res.status(201).json({
@@ -142,10 +145,10 @@ router.post("/", async (req, res) => {
 // 2. Ambil Daftar Pesanan (Staf/Dapur/Kasir)
 router.get("/", authenticate, async (req, res) => {
   try {
-    const { status, date } = req.query;
+    const { status, date, table_number } = req.query;
 
     let sql = `
-      SELECT o.*, t.table_number,
+      SELECT o.*, t.table_number, t.status AS table_status,
              COALESCE(p.payment_method::text, 'qris') AS payment_method,
              COALESCE(p.payment_status::text, 'pending') AS payment_status,
              COALESCE(
@@ -176,11 +179,16 @@ router.get("/", authenticate, async (req, res) => {
       sql += ` AND o.status = $${params.length}`;
     }
 
+    if (table_number) {
+      params.push(parseInt(table_number, 10));
+      sql += ` AND t.table_number = $${params.length}`;
+    }
+
     if (date === "today") {
       sql += ` AND DATE(o.created_at) = CURRENT_DATE`;
     }
 
-    sql += ` GROUP BY o.id, t.table_number, p.payment_method, p.payment_status ORDER BY o.created_at DESC`;
+    sql += ` GROUP BY o.id, t.table_number, t.status, p.payment_method, p.payment_status ORDER BY o.created_at DESC`;
 
     const result = await query(sql, params);
     res.json({ success: true, orders: result.rows });
@@ -271,6 +279,7 @@ router.patch("/:id/status", authenticate, async (req, res) => {
     }
 
     // Jika pesanan selesai atau dibatalkan, bebaskan meja jika tidak ada pesanan aktif lain di meja itu
+    let freedTable = null;
     if (status === "completed" || status === "cancelled") {
       if (updatedOrder.table_id) {
         const activeOrders = await query(
@@ -278,7 +287,11 @@ router.patch("/:id/status", authenticate, async (req, res) => {
           [updatedOrder.table_id, updatedOrder.id]
         );
         if (activeOrders.rows.length === 0) {
-          await query("UPDATE tables SET status = 'available' WHERE id = $1", [updatedOrder.table_id]);
+          const tableUpdateRes = await query(
+            "UPDATE tables SET status = 'available' WHERE id = $1 RETURNING *",
+            [updatedOrder.table_id]
+          );
+          freedTable = tableUpdateRes.rows[0] || null;
         }
       }
     }
@@ -292,6 +305,9 @@ router.patch("/:id/status", authenticate, async (req, res) => {
         status: updatedOrder.status,
         updated_at: updatedOrder.updated_at,
       });
+      if (freedTable) {
+        io.emit("table_status_updated", freedTable);
+      }
     }
 
     res.json({ success: true, message: "Status pesanan berhasil diperbarui.", order: updatedOrder });

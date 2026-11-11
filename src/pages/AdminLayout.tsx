@@ -14,8 +14,7 @@ import Dashboard from "./Dashboard";
 import SalesReport from "./SalesReport";
 import MenuManagement from "./MenuManagement";
 import OrderDetail from "./OrderDetail";
-import { orders as fallbackOrders, formatRp, type Order } from "../data/mockData";
-import { api, mapDbOrderToUi } from "../lib/api";
+import { api, formatRp, mapDbOrderToUi, type Order } from "../lib/api";
 
 type AdminPage = "dashboard" | "orders" | "menu" | "categories" | "report" | "users" | "settings";
 
@@ -50,7 +49,7 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 function OrdersPage({ onViewOrder }: { onViewOrder: (id: string) => void }) {
-  const [orderList, setOrderList] = useState<Order[]>(fallbackOrders);
+  const [orderList, setOrderList] = useState<Order[]>([]);
 
   useEffect(() => {
     let active = true;

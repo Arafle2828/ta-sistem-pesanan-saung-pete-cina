@@ -6,7 +6,6 @@ import {
   TrendingDown,
   DollarSign,
   Receipt,
-  ArrowUpRight,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -18,14 +17,7 @@ import {
   Tooltip,
   Legend,
 } from "recharts";
-import {
-  orders as fallbackOrders,
-  dailySalesData as fallbackSales,
-  topMenuData as fallbackTopMenus,
-  formatRp,
-  type Order,
-} from "../data/mockData";
-import { api, mapDbOrderToUi } from "../lib/api";
+import { api, formatRp, mapDbOrderToUi, type Order } from "../lib/api";
 
 const DATE_FILTERS = ["Hari ini", "Minggu ini", "Bulan ini", "Custom"];
 
@@ -76,16 +68,13 @@ export default function SalesReport() {
   const [activeFilter, setActiveFilter] = useState("Minggu ini");
   const [dateFrom, setDateFrom] = useState("2026-11-05");
   const [dateTo, setDateTo] = useState("2026-11-11");
-  const [orders, setOrders] = useState<Order[]>(fallbackOrders);
-  const [chartData, setChartData] = useState(
-    fallbackSales.map((d) => ({
-      period: d.day,
-      revenue: d.revenue,
-      transactions: d.transactions,
-      expenses: d.expenses ?? 0,
-    }))
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [chartData, setChartData] = useState<
+    Array<{ period: string; revenue: number; transactions: number; expenses: number }>
+  >([]);
+  const [topMenus, setTopMenus] = useState<Array<{ name: string; sold: number; revenue: number }>>(
+    []
   );
-  const [topMenus, setTopMenus] = useState(fallbackTopMenus);
 
   useEffect(() => {
     let active = true;
@@ -215,7 +204,6 @@ export default function SalesReport() {
             icon: Receipt,
             color: "bg-primary",
             iconColor: "text-white",
-            trend: "+14%",
           },
           {
             label: "Total Pendapatan",
@@ -224,7 +212,6 @@ export default function SalesReport() {
             icon: TrendingUp,
             color: "bg-success",
             iconColor: "text-white",
-            trend: "+9%",
           },
           {
             label: "Total Pengeluaran",
@@ -233,7 +220,6 @@ export default function SalesReport() {
             icon: TrendingDown,
             color: "bg-danger",
             iconColor: "text-white",
-            trend: "",
           },
           {
             label: "Laba Bersih",
@@ -242,7 +228,6 @@ export default function SalesReport() {
             icon: DollarSign,
             color: "bg-gold",
             iconColor: "text-white",
-            trend: "+11%",
           },
         ].map((card, i) => (
           <div key={i} className="bg-white rounded-2xl p-5 border border-beige-dark shadow-sm">
@@ -250,12 +235,6 @@ export default function SalesReport() {
               <div className={`w-10 h-10 rounded-xl ${card.color} flex items-center justify-center`}>
                 <card.icon size={18} className={card.iconColor} />
               </div>
-              {card.trend && (
-                <span className="text-xs font-semibold text-success bg-success/10 px-2 py-0.5 rounded-full flex items-center gap-0.5">
-                  <ArrowUpRight size={10} />
-                  {card.trend}
-                </span>
-              )}
             </div>
             <p className="text-lg font-bold text-dark leading-tight">{card.value}</p>
             <p className="text-xs text-dark/50 mt-0.5">{card.label}</p>
