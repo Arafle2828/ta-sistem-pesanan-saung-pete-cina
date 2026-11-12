@@ -1,14 +1,24 @@
 import express from "express";
-import { query, pool } from "../config/db.js";
+import crypto from "node:crypto";
+import { query, pool, generateQrToken } from "../config/db.js";
 import { authenticate } from "../middleware/auth.js";
 
 const router = express.Router();
 
-// 1. Buat Pesanan Baru oleh Pelanggan (Publik via QR Meja)
+// 1. Buat Pesanan Baru oleh Pelanggan (Publik via QR Meja dengan Validasi Sesi & Batas Waktu)
 router.post("/", async (req, res) => {
   const client = await pool.connect();
   try {
-    const { table_number, customer_name, order_type, notes, payment_method, items } = req.body;
+    const {
+      table_number,
+      qr_token,
+      session_token,
+      customer_name,
+      order_type,
+      notes,
+      payment_method,
+      items,
+    } = req.body;
 
     if (!items || !Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ success: false, message: "Pesanan harus memiliki minimal 1 item menu." });
@@ -16,23 +26,82 @@ router.post("/", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // Ambil ID meja jika ada nomor meja
+    // Ambil & validasi meja beserta kunci sesi (Mencegah tabrakan Meja 1 & Meja 2 / Pelanggan Berbeda)
     let tableId = null;
-    if (table_number) {
-      const tableNum = parseInt(table_number, 10);
-      let tableRes = await client.query(
-        "SELECT id FROM tables WHERE table_number = $1",
-        [tableNum]
-      );
-      if (tableRes.rows.length === 0 && !Number.isNaN(tableNum) && tableNum > 0) {
+    let resolvedTableNumber = table_number ? parseInt(table_number, 10) : null;
+    let resolvedSessionToken = session_token || null;
+
+    if (qr_token || resolvedTableNumber) {
+      let tableRes;
+      if (qr_token) {
         tableRes = await client.query(
-          "INSERT INTO tables (table_number, qr_code_url, status) VALUES ($1, $2, 'occupied') ON CONFLICT (table_number) DO UPDATE SET status = 'occupied' RETURNING id",
-          [tableNum, `/order?table=${tableNum}`]
+          "SELECT * FROM tables WHERE qr_token = $1 FOR UPDATE",
+          [String(qr_token).trim()]
+        );
+      } else {
+        tableRes = await client.query(
+          "SELECT * FROM tables WHERE table_number = $1 FOR UPDATE",
+          [resolvedTableNumber]
         );
       }
+
+      if (tableRes.rows.length === 0 && resolvedTableNumber && resolvedTableNumber > 0) {
+        const newQr = generateQrToken(resolvedTableNumber);
+        tableRes = await client.query(
+          `INSERT INTO tables (table_number, qr_token, qr_code_url, status)
+           VALUES ($1, $2, $3, 'occupied')
+           ON CONFLICT (table_number) DO UPDATE SET status = 'occupied'
+           RETURNING *`,
+          [resolvedTableNumber, newQr, `/order?qr=${newQr}`]
+        );
+      }
+
       if (tableRes.rows.length > 0) {
-        tableId = tableRes.rows[0].id;
-        await client.query("UPDATE tables SET status = 'occupied' WHERE id = $1", [tableId]);
+        const table = tableRes.rows[0];
+        tableId = table.id;
+        resolvedTableNumber = table.table_number;
+
+        // Cek pesanan aktif di meja ini
+        const activeOrdersRes = await client.query(
+          "SELECT id FROM orders WHERE table_id = $1 AND status NOT IN ('completed', 'cancelled')",
+          [table.id]
+        );
+        const hasActiveOrders = activeOrdersRes.rows.length > 0;
+        const now = new Date();
+        const expiresAt = table.session_expires_at ? new Date(table.session_expires_at) : null;
+        const isTimerActive = Boolean(expiresAt && expiresAt > now);
+        const isLocked = Boolean(table.active_session_token) && (isTimerActive || hasActiveOrders);
+
+        // 1. Jika meja sedang dikunci oleh sesi perangkat lain, tolak agar tidak terjadi tabrakan meja!
+        if (isLocked && (!resolvedSessionToken || resolvedSessionToken !== table.active_session_token)) {
+          throw new Error(
+            `Meja ${table.table_number} sedang digunakan oleh pelanggan lain. Tidak dapat mengirim pesanan untuk mencegah tabrakan pesanan.`
+          );
+        }
+
+        // 2. Jika pemegang sesi yang sama tapi waktu 15 menit memilih menu sudah habis, tolak dan minta perbarui sesi
+        if (
+          table.active_session_token &&
+          resolvedSessionToken === table.active_session_token &&
+          !isTimerActive
+        ) {
+          throw new Error(
+            `Waktu maksimal pemesanan (15 menit) di Meja ${table.table_number} telah habis. Silakan perbarui sesi atau scan ulang QR Code meja.`
+          );
+        }
+
+        // 3. Kunci meja dengan session_token ini
+        if (!resolvedSessionToken) {
+          resolvedSessionToken = crypto.randomBytes(16).toString("hex");
+        }
+        await client.query(
+          `UPDATE tables
+           SET status = 'occupied',
+               active_session_token = $1,
+               session_expires_at = COALESCE(session_expires_at, CURRENT_TIMESTAMP + INTERVAL '15 minutes')
+           WHERE id = $2`,
+          [resolvedSessionToken, tableId]
+        );
       }
     }
 
@@ -80,10 +149,10 @@ router.post("/", async (req, res) => {
 
     // Buat record pesanan di tabel orders
     const orderRes = await client.query(
-      `INSERT INTO orders (table_id, customer_name, order_type, status, notes, total_amount)
-       VALUES ($1, $2, $3, 'new', $4, $5)
+      `INSERT INTO orders (table_id, session_token, customer_name, order_type, status, notes, total_amount)
+       VALUES ($1, $2, $3, $4, 'new', $5, $6)
        RETURNING *`,
-      [tableId, customer_name || "Pelanggan", order_type || "dine-in", notes || null, calculatedTotal]
+      [tableId, resolvedSessionToken, customer_name || "Pelanggan", order_type || "dine-in", notes || null, calculatedTotal]
     );
 
     const createdOrder = orderRes.rows[0];
@@ -113,7 +182,7 @@ router.post("/", async (req, res) => {
 
     const fullOrder = {
       ...createdOrder,
-      table_number: table_number || null,
+      table_number: resolvedTableNumber || null,
       payment_method: methodNormalized,
       payment_status: "pending",
       items: validatedItems,
@@ -124,7 +193,7 @@ router.post("/", async (req, res) => {
     if (io) {
       io.emit("new_order", fullOrder);
       if (tableId) {
-        io.emit("table_status_updated", { id: tableId, table_number: Number(table_number), status: "occupied" });
+        io.emit("table_status_updated", { id: tableId, table_number: Number(resolvedTableNumber), status: "occupied" });
       }
     }
 
@@ -288,7 +357,12 @@ router.patch("/:id/status", authenticate, async (req, res) => {
         );
         if (activeOrders.rows.length === 0) {
           const tableUpdateRes = await query(
-            "UPDATE tables SET status = 'available' WHERE id = $1 RETURNING *",
+            `UPDATE tables
+             SET status = 'available',
+                 active_session_token = NULL,
+                 session_expires_at = NULL
+             WHERE id = $1
+             RETURNING *`,
             [updatedOrder.table_id]
           );
           freedTable = tableUpdateRes.rows[0] || null;

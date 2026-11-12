@@ -50,9 +50,22 @@ router.post("/", authenticate, requireRole("cashier", "admin"), async (req, res)
     // Update status pesanan menjadi completed
     await client.query("UPDATE orders SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE id = $1", [order.id]);
 
-    // Bebaskan meja
+    // Bebaskan meja & sesi meja jika tidak ada pesanan aktif lain di meja tersebut
     if (order.table_id) {
-      await client.query("UPDATE tables SET status = 'available' WHERE id = $1", [order.table_id]);
+      const remainingOrders = await client.query(
+        "SELECT id FROM orders WHERE table_id = $1 AND status NOT IN ('completed', 'cancelled') AND id != $2",
+        [order.table_id, order.id]
+      );
+      if (remainingOrders.rows.length === 0) {
+        await client.query(
+          `UPDATE tables
+           SET status = 'available',
+               active_session_token = NULL,
+               session_expires_at = NULL
+           WHERE id = $1`,
+          [order.table_id]
+        );
+      }
     }
 
     await client.query("COMMIT");

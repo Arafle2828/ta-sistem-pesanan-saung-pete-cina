@@ -28,7 +28,10 @@ erDiagram
     TABLES {
         uuid id PK
         integer table_number
+        string qr_token "Kode unik acak QR per meja"
         string qr_code_url
+        string active_session_token "Token sesi perangkat aktif"
+        datetime session_expires_at "Batas waktu maksimal sesi pemesanan (15 menit)"
         enum status "available, occupied"
         datetime created_at
     }
@@ -56,6 +59,7 @@ erDiagram
         uuid id PK
         string order_number
         uuid table_id FK
+        string session_token "Token sesi meja pemesan"
         string customer_name
         enum order_type "dine-in, takeaway"
         enum status "new, processing, preparing, ready, completed, cancelled"
@@ -119,11 +123,14 @@ CREATE TABLE users (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- 2. Tabel Tables (Nomor Meja & QR Code)
+-- 2. Tabel Tables (Nomor Meja, QR Token Acak & Sesi Berbatas Waktu)
 CREATE TABLE tables (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     table_number INT UNIQUE NOT NULL,
+    qr_token VARCHAR(64) UNIQUE DEFAULT ('spc-' || substr(md5(random()::text), 1, 12)),
     qr_code_url TEXT,
+    active_session_token VARCHAR(64),
+    session_expires_at TIMESTAMP WITH TIME ZONE,
     status table_status DEFAULT 'available',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -154,6 +161,7 @@ CREATE TABLE orders (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     order_number VARCHAR(20) UNIQUE NOT NULL,
     table_id UUID REFERENCES tables(id) ON DELETE SET NULL,
+    session_token VARCHAR(64),
     customer_name VARCHAR(50) DEFAULT 'Pelanggan',
     order_type order_type DEFAULT 'dine-in',
     status order_status DEFAULT 'new',

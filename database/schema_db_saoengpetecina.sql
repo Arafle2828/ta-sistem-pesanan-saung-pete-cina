@@ -47,11 +47,14 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- 4. Tabel Tables (Nomor Meja & QR Code)
+-- 4. Tabel Tables (Nomor Meja, Token QR Acak & Sesi Berbatas Waktu)
 CREATE TABLE IF NOT EXISTS tables (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     table_number INT UNIQUE NOT NULL,
+    qr_token VARCHAR(64) UNIQUE DEFAULT ('spc-' || substr(md5(random()::text), 1, 12)),
     qr_code_url TEXT,
+    active_session_token VARCHAR(64),
+    session_expires_at TIMESTAMP WITH TIME ZONE,
     status table_status DEFAULT 'available',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -85,6 +88,7 @@ CREATE TABLE IF NOT EXISTS orders (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     order_number VARCHAR(20) UNIQUE NOT NULL DEFAULT ('ORD-' || lpad(nextval('order_number_seq')::text, 4, '0')),
     table_id UUID REFERENCES tables(id) ON DELETE SET NULL,
+    session_token VARCHAR(64),
     customer_name VARCHAR(50) DEFAULT 'Pelanggan',
     order_type order_type DEFAULT 'dine-in',
     status order_status DEFAULT 'new',

@@ -12,6 +12,7 @@ import tableRoutes from "./routes/table.routes.js";
 import orderRoutes from "./routes/order.routes.js";
 import paymentRoutes from "./routes/payment.routes.js";
 import reportRoutes from "./routes/report.routes.js";
+import { ensureTableQrSessionSchema } from "./config/db.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, "../.env") });
@@ -84,10 +85,11 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 5000;
 
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
   console.log(`====================================================`);
   console.log(`🚀 Server Backend Saung Pete Cina berjalan di port ${PORT}`);
   console.log(`📡 URL API: http://localhost:${PORT}/api`);
   console.log(`🗄️ Database: ${process.env.DB_NAME || "db_saoengpetecina"}`);
   console.log(`====================================================`);
+  await ensureTableQrSessionSchema();
 });

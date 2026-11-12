@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import {
   ShoppingCart,
   Plus,
@@ -11,6 +11,10 @@ import {
   Bell,
   Package,
   UtensilsCrossed,
+  ShieldAlert,
+  RefreshCw,
+  Timer,
+  QrCode,
 } from "lucide-react";
 import {
   CATEGORIES,
@@ -43,11 +47,34 @@ const DB_STATUS_TO_STEP: Record<string, number> = {
   done: 5,
 };
 
+function getSessionStorageKey(qrToken: string | null, tableNum: number) {
+  return qrToken ? `spc_session_qr_${qrToken}` : `spc_session_table_${tableNum}`;
+}
+
+function formatCountdown(seconds: number): string {
+  const safe = Math.max(0, Math.floor(seconds));
+  const mins = Math.floor(safe / 60);
+  const secs = safe % 60;
+  return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+}
+
 export default function CustomerOrder() {
-  const tableNumber = useMemo(() => {
+  const urlParams = useMemo(() => {
     const params = new URLSearchParams(window.location.search);
-    return Number(params.get("table")) || 5;
+    return {
+      qrToken: params.get("qr"),
+      tableParam: Number(params.get("table")) || 5,
+    };
   }, []);
+
+  const [tableNumber, setTableNumber] = useState<number>(urlParams.tableParam);
+  const [qrToken, setQrToken] = useState<string | null>(urlParams.qrToken);
+  const [sessionToken, setSessionToken] = useState<string | null>(null);
+  const [sessionExpiresAt, setSessionExpiresAt] = useState<string | null>(null);
+  const [remainingSeconds, setRemainingSeconds] = useState<number>(15 * 60);
+  const [lockedByOther, setLockedByOther] = useState<boolean>(false);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const [initializingSession, setInitializingSession] = useState<boolean>(true);
 
   const [menus, setMenus] = useState<MenuItem[]>([]);
   const [loadingMenus, setLoadingMenus] = useState(true);
@@ -63,8 +90,58 @@ export default function CustomerOrder() {
   const [activeTableOrder, setActiveTableOrder] = useState<{
     order_number: string;
     status: string;
+    customer_name?: string;
   } | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  const initOrRenewSession = useCallback(
+    async (renew = false) => {
+      setInitializingSession(true);
+      setSessionError(null);
+      try {
+        const storageKey = getSessionStorageKey(urlParams.qrToken, urlParams.tableParam);
+        const savedToken =
+          localStorage.getItem(storageKey) ||
+          localStorage.getItem(`spc_session_table_${tableNumber}`);
+
+        const res = await api.initTableSession({
+          qr_token: urlParams.qrToken,
+          table_number: urlParams.qrToken ? undefined : urlParams.tableParam,
+          client_session_token: savedToken,
+          renew,
+        });
+
+        const resolvedTableNum = res.table?.table_number || urlParams.tableParam;
+        const resolvedQr = res.table?.qr_token || urlParams.qrToken;
+        setTableNumber(resolvedTableNum);
+        setQrToken(resolvedQr);
+        setLockedByOther(Boolean(res.locked_by_other));
+        setSessionExpiresAt(res.session_expires_at || null);
+
+        if (res.session_token) {
+          setSessionToken(res.session_token);
+          localStorage.setItem(getSessionStorageKey(resolvedQr, resolvedTableNum), res.session_token);
+          localStorage.setItem(`spc_session_table_${resolvedTableNum}`, res.session_token);
+        }
+
+        if (res.table?.active_orders && res.table.active_orders.length > 0) {
+          const latest = res.table.active_orders[0];
+          setActiveTableOrder({
+            order_number: latest.order_number || latest.id,
+            status: latest.status || "new",
+            customer_name: latest.customer_name,
+          });
+        } else {
+          setActiveTableOrder(null);
+        }
+      } catch (err: any) {
+        setSessionError(err?.message || "Gagal memvalidasi QR Code meja.");
+      } finally {
+        setInitializingSession(false);
+      }
+    },
+    [urlParams.qrToken, urlParams.tableParam, tableNumber]
+  );
 
   useEffect(() => {
     let active = true;
@@ -81,23 +158,27 @@ export default function CustomerOrder() {
         if (active) setLoadingMenus(false);
       });
 
-    api
-      .getTableByNumber(tableNumber)
-      .then((res) => {
-        if (active && res.table?.active_orders?.length > 0) {
-          const latest = res.table.active_orders[0];
-          setActiveTableOrder({
-            order_number: latest.order_number || latest.id,
-            status: latest.status || "new",
-          });
-        }
-      })
-      .catch(() => {});
+    initOrRenewSession(false);
 
     return () => {
       active = false;
     };
-  }, [tableNumber]);
+  }, [initOrRenewSession]);
+
+  // Countdown timer untuk batas waktu maksimal pemesanan di meja (15 menit)
+  useEffect(() => {
+    if (!sessionExpiresAt) return;
+    const updateTimer = () => {
+      const diffMs = new Date(sessionExpiresAt).getTime() - Date.now();
+      setRemainingSeconds(Math.max(0, Math.floor(diffMs / 1000)));
+    };
+    updateTimer();
+    const iv = setInterval(updateTimer, 1000);
+    return () => clearInterval(iv);
+  }, [sessionExpiresAt]);
+
+  const isSessionExpired =
+    !initializingSession && !lockedByOther && Boolean(sessionExpiresAt) && remainingSeconds <= 0 && step !== "tracking";
 
   useEffect(() => {
     if (step !== "tracking" || !orderNumber) return;
@@ -159,11 +240,21 @@ export default function CustomerOrder() {
   const getQty = (id: string | number) => cart.find((c) => c.item.id === id)?.qty ?? 0;
 
   const handleOrder = async () => {
+    if (lockedByOther) {
+      setOrderError("Meja ini sedang digunakan oleh pelanggan lain. Anda tidak dapat membuat pesanan baru.");
+      return;
+    }
+    if (isSessionExpired) {
+      setOrderError("Waktu sesi pemesanan (15 menit) telah habis. Silakan mulai sesi baru.");
+      return;
+    }
     setSubmitting(true);
     setOrderError(null);
     try {
       const res = await api.createOrder({
         table_number: tableNumber,
+        qr_token: qrToken,
+        session_token: sessionToken,
         customer_name: customerName.trim() || "Pelanggan",
         order_type: orderType,
         notes: orderNote.trim() || undefined,
@@ -175,7 +266,7 @@ export default function CustomerOrder() {
       });
       const ordNum = res.order?.order_number || String(res.order?.id || "");
       setOrderNumber(ordNum);
-      setActiveTableOrder({ order_number: ordNum, status: "new" });
+      setActiveTableOrder({ order_number: ordNum, status: "new", customer_name: customerName });
       setOrderStatus(1);
       setStep("tracking");
     } catch (err: any) {
@@ -189,22 +280,50 @@ export default function CustomerOrder() {
     <div className="h-full bg-primary-deep flex items-center justify-center overflow-hidden">
       <div className="w-[390px] h-full bg-beige flex flex-col relative overflow-hidden shadow-2xl">
         {/* Header */}
-        <div className="bg-primary text-white px-4 pt-10 pb-4 shrink-0">
+        <div className="bg-primary text-white px-4 pt-8 pb-3.5 shrink-0">
           <div className="flex items-center justify-between mb-1">
             <div>
-              <p className="text-xs text-soft-green font-medium tracking-widest uppercase">
-                Saung Pete Cina
-              </p>
-              <h1 className="text-lg font-bold leading-tight">Selamat Datang!</h1>
+              <div className="flex items-center gap-1.5">
+                <p className="text-xs text-soft-green font-medium tracking-widest uppercase">
+                  Saung Pete Cina
+                </p>
+                {qrToken && (
+                  <span className="inline-flex items-center gap-1 bg-white/10 text-[10px] text-soft-green px-2 py-0.5 rounded-full font-mono">
+                    <QrCode size={10} />
+                    {qrToken}
+                  </span>
+                )}
+              </div>
+              <h1 className="text-lg font-bold leading-tight mt-0.5">Selamat Datang!</h1>
             </div>
             <div className="bg-white/10 rounded-xl px-3 py-2 text-center border border-white/20">
               <p className="text-[10px] text-soft-green font-medium">MEJA</p>
               <p className="text-xl font-bold leading-none">{tableNumber}</p>
             </div>
           </div>
-          <p className="text-xs text-white/60 mt-1">
+          <p className="text-xs text-white/60 mt-0.5">
             Silakan pilih menu dan pesan langsung dari meja Anda
           </p>
+
+          {/* Timer Sesi Pemesanan Meja (15 Menit) */}
+          {!lockedByOther && sessionExpiresAt && step !== "tracking" && (
+            <div
+              className={`mt-2.5 rounded-xl px-3 py-1.5 flex items-center justify-between text-xs font-medium border ${
+                remainingSeconds <= 180
+                  ? "bg-danger/25 border-danger/50 text-white"
+                  : "bg-white/10 border-white/15 text-white/90"
+              }`}
+            >
+              <span className="flex items-center gap-1.5">
+                <Timer size={13} className="text-soft-green shrink-0" />
+                <span>Batas Waktu Pemesanan:</span>
+              </span>
+              <span className="font-mono font-bold text-sm tracking-wider">
+                {formatCountdown(remainingSeconds)}
+              </span>
+            </div>
+          )}
+
           {step === "menu" && activeTableOrder && (
             <button
               onClick={() => {
@@ -212,7 +331,7 @@ export default function CustomerOrder() {
                 setOrderStatus(DB_STATUS_TO_STEP[activeTableOrder.status] ?? 1);
                 setStep("tracking");
               }}
-              className="mt-2.5 w-full bg-gold text-white rounded-xl px-3 py-2 flex items-center justify-between text-xs font-semibold shadow-sm hover:bg-gold/90 transition-colors"
+              className="mt-2 w-full bg-gold text-white rounded-xl px-3 py-2 flex items-center justify-between text-xs font-semibold shadow-sm hover:bg-gold/90 transition-colors"
             >
               <span className="flex items-center gap-1.5">
                 <Clock size={13} />
@@ -223,7 +342,88 @@ export default function CustomerOrder() {
           )}
         </div>
 
-        {step === "menu" && (
+        {/* Layar Proteksi: Jika Meja Sedang Digunakan oleh Perangkat/Pelanggan Lain */}
+        {lockedByOther && step !== "tracking" ? (
+          <div className="flex-1 overflow-y-auto px-5 py-8 flex flex-col items-center justify-center text-center">
+            <div className="w-16 h-16 rounded-2xl bg-gold/15 border border-gold/30 flex items-center justify-center mb-4">
+              <ShieldAlert size={32} className="text-wood" />
+            </div>
+            <h2 className="text-lg font-bold text-dark">
+              Meja {tableNumber} Sedang Digunakan
+            </h2>
+            <p className="text-xs text-dark/60 mt-2 leading-relaxed">
+              Sesi pemesanan di <strong>Meja {tableNumber}</strong> sedang terkunci pada perangkat
+              pemesan pertama untuk mencegah tabrakan pesanan antar meja maupun pelanggan.
+            </p>
+
+            {activeTableOrder ? (
+              <div className="w-full bg-white rounded-2xl border border-beige-dark p-4 mt-5 text-left space-y-2.5 shadow-sm">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-dark/40">
+                    Pesanan Aktif di Meja {tableNumber}
+                  </span>
+                  <span className="text-xs font-bold text-primary bg-primary/10 px-2.5 py-0.5 rounded-full">
+                    {activeTableOrder.order_number}
+                  </span>
+                </div>
+                {activeTableOrder.customer_name && (
+                  <p className="text-xs text-dark/70">
+                    Pemesan: <strong>{activeTableOrder.customer_name}</strong>
+                  </p>
+                )}
+                <button
+                  onClick={() => {
+                    setOrderNumber(activeTableOrder.order_number);
+                    setOrderStatus(DB_STATUS_TO_STEP[activeTableOrder.status] ?? 1);
+                    setStep("tracking");
+                  }}
+                  className="w-full bg-primary text-white font-semibold py-2.5 rounded-xl text-xs hover:bg-primary-deep transition-colors mt-1"
+                >
+                  Lihat Status Pesanan ({activeTableOrder.order_number})
+                </button>
+              </div>
+            ) : (
+              <div className="w-full bg-white rounded-2xl border border-beige-dark p-4 mt-5 text-xs text-dark/60">
+                Pelanggan di meja ini sedang dalam batas waktu 15 menit memilih menu. Jika pelanggan
+                sebelumnya batal memesan, sesi akan terbuka otomatis setelah waktu habis atau
+                di-reset oleh Kasir.
+              </div>
+            )}
+
+            <button
+              onClick={() => initOrRenewSession(false)}
+              className="mt-4 inline-flex items-center gap-2 text-xs font-semibold text-primary border border-primary/30 bg-white px-4 py-2.5 rounded-xl hover:bg-primary/5 transition-colors"
+            >
+              <RefreshCw size={13} />
+              Cek Ulang Status Meja
+            </button>
+          </div>
+        ) : isSessionExpired ? (
+          /* Layar Sesi Habis (Lewat 15 Menit Belum Checkout) */
+          <div className="flex-1 overflow-y-auto px-5 py-8 flex flex-col items-center justify-center text-center">
+            <div className="w-16 h-16 rounded-2xl bg-danger/10 border border-danger/20 flex items-center justify-center mb-4">
+              <Timer size={32} className="text-danger" />
+            </div>
+            <h2 className="text-lg font-bold text-dark">Waktu Sesi Pemesanan Habis</h2>
+            <p className="text-xs text-dark/60 mt-2 leading-relaxed">
+              Batas waktu maksimal <strong>15 menit</strong> untuk memilih menu di{" "}
+              <strong>Meja {tableNumber}</strong> telah berakhir agar meja tidak terkunci secara
+              permanen.
+            </p>
+            {sessionError && (
+              <p className="text-xs text-danger mt-2 font-medium">{sessionError}</p>
+            )}
+            <button
+              onClick={() => initOrRenewSession(true)}
+              className="mt-6 w-full bg-primary text-white font-bold py-3.5 rounded-2xl text-sm shadow-lg shadow-primary/25 hover:bg-primary-deep transition-colors flex items-center justify-center gap-2"
+            >
+              <RefreshCw size={15} />
+              Mulai Sesi Baru (15 Menit)
+            </button>
+          </div>
+        ) : (
+          <>
+            {step === "menu" && (
           <>
             {/* Category Tabs */}
             <div className="bg-white border-b border-beige-dark px-2 py-2 flex gap-1 overflow-x-auto shrink-0">
@@ -587,33 +787,47 @@ export default function CustomerOrder() {
                 );
               })}
             </div>
-            <div className="mt-4 w-full bg-white rounded-2xl border border-beige-dark p-4">
-              <h3 className="font-bold text-dark text-sm mb-2">Ringkasan Pesanan</h3>
-              {cart.map(({ item, qty }) => (
-                <div key={item.id} className="flex justify-between text-sm py-1">
-                  <span className="text-dark/70">
-                    {item.name} ×{qty}
-                  </span>
-                  <span className="font-medium text-dark">{formatRp(item.price * qty)}</span>
+            {cart.length > 0 && (
+              <div className="mt-4 w-full bg-white rounded-2xl border border-beige-dark p-4">
+                <h3 className="font-bold text-dark text-sm mb-2">Ringkasan Pesanan</h3>
+                {cart.map(({ item, qty }) => (
+                  <div key={item.id} className="flex justify-between text-sm py-1">
+                    <span className="text-dark/70">
+                      {item.name} ×{qty}
+                    </span>
+                    <span className="font-medium text-dark">{formatRp(item.price * qty)}</span>
+                  </div>
+                ))}
+                <div className="border-t border-beige-dark mt-2 pt-2 flex justify-between">
+                  <span className="font-bold text-dark text-sm">Total</span>
+                  <span className="font-bold text-primary">{formatRp(cartTotal)}</span>
                 </div>
-              ))}
-              <div className="border-t border-beige-dark mt-2 pt-2 flex justify-between">
-                <span className="font-bold text-dark text-sm">Total</span>
-                <span className="font-bold text-primary">{formatRp(cartTotal)}</span>
               </div>
-            </div>
-            <button
-              onClick={() => {
-                setCart([]);
-                setStep("menu");
-                setOrderStatus(1);
-                setOrderNote("");
-              }}
-              className="mt-5 w-full border border-primary text-primary font-semibold py-3 rounded-2xl text-sm hover:bg-primary/5 transition-colors"
-            >
-              Tambah Pesanan Lagi
-            </button>
+            )}
+            {lockedByOther ? (
+              <button
+                onClick={() => setStep("menu")}
+                className="mt-5 w-full border border-primary text-primary font-semibold py-3 rounded-2xl text-sm hover:bg-primary/5 transition-colors"
+              >
+                Kembali ke Info Meja
+              </button>
+            ) : (
+              <button
+                onClick={async () => {
+                  await initOrRenewSession(true);
+                  setCart([]);
+                  setStep("menu");
+                  setOrderStatus(1);
+                  setOrderNote("");
+                }}
+                className="mt-5 w-full border border-primary text-primary font-semibold py-3 rounded-2xl text-sm hover:bg-primary/5 transition-colors"
+              >
+                Tambah Pesanan Lagi (+15 Menit Sesi)
+              </button>
+            )}
           </div>
+        )}
+          </>
         )}
       </div>
     </div>

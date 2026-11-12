@@ -59,8 +59,11 @@ export interface Order {
 export interface TableInfo {
   id: string;
   table_number: number;
+  qr_token: string;
   qr_code_url: string;
   status: "available" | "occupied";
+  session_expires_at: string | null;
+  has_active_session: boolean;
   active_orders_count: number;
 }
 
@@ -234,7 +237,7 @@ export const api = {
     });
   },
 
-  // Tables
+  // Tables & QR Sessions
   async getTables(): Promise<{ success: boolean; tables: TableInfo[] }> {
     const res = await request<{ success: boolean; tables: any[] }>("/tables");
     return {
@@ -242,15 +245,74 @@ export const api = {
       tables: (res.tables || []).map((t) => ({
         id: String(t.id),
         table_number: Number(t.table_number),
-        qr_code_url: t.qr_code_url || `/order?table=${t.table_number}`,
+        qr_token: String(t.qr_token || `spc-m${t.table_number}`),
+        qr_code_url: t.qr_code_url || `/order?qr=${t.qr_token || `spc-m${t.table_number}`}`,
         status: t.status === "occupied" ? "occupied" : "available",
+        session_expires_at: t.session_expires_at || null,
+        has_active_session: Boolean(t.has_active_session),
         active_orders_count: Number(t.active_orders_count || 0),
       })),
     };
   },
 
-  async getTableByNumber(tableNumber: number) {
+  async initTableSession(payload: {
+    qr_token?: string | null;
+    table_number?: number | null;
+    client_session_token?: string | null;
+    renew?: boolean;
+  }) {
+    return request<{
+      success: boolean;
+      is_owner: boolean;
+      locked_by_other: boolean;
+      session_token: string | null;
+      session_expires_at: string | null;
+      max_duration_minutes: number;
+      table: {
+        id: string;
+        table_number: number;
+        qr_token: string;
+        qr_code_url: string;
+        status: "available" | "occupied";
+        session_expires_at: string | null;
+        active_orders: Array<{
+          id: string;
+          order_number: string;
+          customer_name: string;
+          status: string;
+          total_amount: number;
+          created_at: string;
+        }>;
+      };
+    }>("/tables/session/init", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async getTableByNumber(tableNumber: number | string) {
     return request<{ success: boolean; table: any }>(`/tables/${tableNumber}`);
+  },
+
+  async regenerateTableQr(idOrTableNumber: string | number) {
+    return request<{ success: boolean; message: string; table: any }>(
+      `/tables/${idOrTableNumber}/regenerate-qr`,
+      { method: "POST" }
+    );
+  },
+
+  async regenerateAllTableQrs() {
+    return request<{ success: boolean; message: string; tables: any[] }>(
+      "/tables/regenerate-all-qr",
+      { method: "POST" }
+    );
+  },
+
+  async resetTableSession(idOrTableNumber: string | number) {
+    return request<{ success: boolean; message: string; table: any }>(
+      `/tables/${idOrTableNumber}/reset-session`,
+      { method: "POST" }
+    );
   },
 
   async updateTableStatus(idOrTableNumber: string | number, status: "available" | "occupied") {
@@ -263,6 +325,8 @@ export const api = {
   // Orders
   async createOrder(payload: {
     table_number?: number;
+    qr_token?: string | null;
+    session_token?: string | null;
     customer_name?: string;
     order_type?: "dine-in" | "takeaway";
     notes?: string;
